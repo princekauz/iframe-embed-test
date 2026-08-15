@@ -44,6 +44,8 @@
       gap: 8px;
       align-items: center;
       background: #0b1224;
+      position: relative;
+      z-index: 100;
     }
     .controls input[type="url"] {
       flex: 1 1 320px;
@@ -81,6 +83,8 @@
       gap: 6px;
       padding: 0 24px 12px;
       background: #0b1224;
+      position: relative;
+      z-index: 100;
     }
     .status {
       padding: 12px 24px;
@@ -267,30 +271,28 @@
         });
       }
 
-      if (loadBtn) {
-        loadBtn.addEventListener('click', () => {
-          boot("Load button clicked");
+      // Bulletproof: use event delegation on document so clicks always reach
+      // us, regardless of stacking context / iframe focus stealing. We catch
+      // the event in CAPTURE phase before it can be consumed by anything else.
+      document.addEventListener('click', (e) => {
+        boot("document click captured: " + (e.target && e.target.tagName) + " id=" + (e.target && e.target.id) + " class=" + (e.target && e.target.className));
+        const target = e.target.closest('[data-url], #loadBtn');
+        if (!target) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (target.id === 'loadBtn') {
           loadUrl(urlInput.value);
-        });
-      }
+        } else if (target.dataset && target.dataset.url) {
+          loadUrl(target.dataset.url);
+        }
+      }, true); // <-- capture phase
 
-      if (urlInput) {
-        urlInput.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') {
-            boot("Enter pressed in URL input");
-            loadUrl(urlInput.value);
-          }
-        });
-      }
-
-      const presets = document.querySelectorAll('.preset');
-      boot("found " + presets.length + " preset buttons");
-      presets.forEach((btn) => {
-        btn.addEventListener('click', () => {
-          boot("preset clicked: " + btn.dataset.url);
-          loadUrl(btn.dataset.url);
-        });
-      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && document.activeElement === urlInput) {
+          boot("Enter pressed in URL input");
+          loadUrl(urlInput.value);
+        }
+      }, true);
 
       boot("all listeners bound — ready");
       if (iframe && status) renderStatus({ state: 'loaded', url: iframe.src, elapsedMs: 0 });
