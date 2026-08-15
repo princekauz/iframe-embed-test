@@ -176,6 +176,10 @@
     const urlInput = document.getElementById('urlInput');
     const loadBtn = document.getElementById('loadBtn');
 
+    // Track which URL we are *expecting* to load so stale load events
+    // (e.g. from about:blank or a previous request that finished late)
+    // don't update the status panel for the wrong URL.
+    let expectedUrl = iframe.src;
     let loadStart = 0;
 
     function setBadge(text, kind) {
@@ -193,7 +197,7 @@
         detail = `Loaded ${url} in ${elapsedMs} ms — the page rendered inside the iframe. Iframes bypass CORS (which only governs fetch/XHR), but the site may still refuse embedding via X-Frame-Options.`;
       } else if (state === 'blocked') {
         badge = setBadge('X-FRAME-OPTIONS', 'warn');
-        detail = `The browser loaded a response for ${url}, but the site sent X-Frame-Options / CSP frame-ancestors that blocked rendering. CORS is irrelevant here — this is a framing policy.`;
+        detail = `The browser blocked framing for ${url}. The site sends X-Frame-Options / CSP frame-ancestors. CORS is irrelevant — this is a server-side framing policy.`;
       } else if (state === 'error') {
         badge = setBadge('ERROR', 'err');
         detail = `Failed to load ${url}: ${error || 'unknown error'}`;
@@ -205,31 +209,40 @@
       let url = rawUrl.trim();
       if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
       urlInput.value = url;
+      expectedUrl = url;
       loadStart = performance.now();
       renderStatus({ state: 'loading', url });
-      iframe.src = 'about:blank';
-      // Small delay so the badge actually shows the loading state
-      setTimeout(() => { iframe.src = url; }, 50);
+      // Set src directly — no about:blank indirection, which races the load
+      // event handler and was preventing the second/subsequent loads from
+      // updating the status panel.
+      iframe.src = url;
     }
 
     iframe.addEventListener('load', () => {
+      // Ignore load events for URLs we didn't ask for (stale, late, or about:blank).
+      if (iframe.src !== expectedUrl) return;
       const elapsed = Math.round(performance.now() - loadStart);
+      // Cross-origin frames throw on contentDocument access — that's expected
+      // and means the load *succeeded* (the browser wouldn't let us inspect
+      // a blocked frame because it never finished loading real content).
       try {
-        // Same-origin check — only works for same-origin frames.
-        const test = iframe.contentWindow || iframe.contentDocument;
-        if (test && (iframe.contentDocument || iframe.contentWindow)) {
+        const doc = iframe.contentDocument;
+        if (doc && doc.body && doc.body.childElementCount > 0) {
           renderStatus({ state: 'loaded', url: iframe.src, elapsedMs: elapsed });
         } else {
+          // Same-origin but empty — the page rendered nothing.
           renderStatus({ state: 'loaded', url: iframe.src, elapsedMs: elapsed });
         }
       } catch (e) {
-        // Cross-origin: we can't inspect the document, but the load event fired,
-        // so the browser did NOT block framing. This is the expected case.
+        // Cross-origin: the load event fired, so the site did NOT send
+        // X-Frame-Options/CSP that would block us. If it had, we'd see
+        // no load event (or about:blank).
         renderStatus({ state: 'loaded', url: iframe.src, elapsedMs: elapsed });
       }
     });
 
     iframe.addEventListener('error', () => {
+      if (iframe.src !== expectedUrl) return;
       renderStatus({ state: 'error', url: iframe.src, error: 'iframe load error event' });
     });
 
@@ -242,7 +255,7 @@
       btn.addEventListener('click', () => loadUrl(btn.dataset.url));
     });
 
-    // Initial render
+    // Initial render (matches the iframe's initial src on first page load)
     renderStatus({ state: 'loaded', url: iframe.src, elapsedMs: 0 });
   </script>
 </body>
